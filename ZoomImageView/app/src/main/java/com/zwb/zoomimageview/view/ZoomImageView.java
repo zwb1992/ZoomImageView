@@ -51,6 +51,12 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
 
     private boolean autoScale;//图片是否正在自动缩放
 
+    private TouchCallBack touchCallBack;
+
+    public void setTouchCallBack(TouchCallBack touchCallBack) {
+        this.touchCallBack = touchCallBack;
+    }
+
     public ZoomImageView(Context context) {
         this(context, null);
     }
@@ -83,6 +89,9 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
             @Override//同上者，但有附加条件，就是Android会确保单击之后短时间内没有再次单击，才会触发该函数。
             public boolean onSingleTapConfirmed(MotionEvent e) {
                 Log.e("info", "==onSingleTapConfirmed==" + e.getPointerCount());
+                if (touchCallBack != null) {
+                    touchCallBack.onSingleTap();
+                }
                 return true;
             }
         });
@@ -102,7 +111,9 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
 
     @Override //布局发生变化
     public void onGlobalLayout() {
+        Log.e("info", "==onGlobalLayout====" );
         if (!once) {
+            matrix = new Matrix();
             float scale = 1.0f;
             int width = getWidth();
             int height = getHeight();
@@ -209,6 +220,7 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
 
     @Override
     public boolean onScale(ScaleGestureDetector detector) {
+        Log.e("info", "===onScale==");
         if (getDrawable() == null) {
             return true;
         }
@@ -236,13 +248,14 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
 
     @Override
     public boolean onScaleBegin(ScaleGestureDetector detector) {
+        Log.e("info", "===onScaleBegin==");
         //必须返回true
         return true;
     }
 
     @Override
     public void onScaleEnd(ScaleGestureDetector detector) {
-
+        Log.e("info", "===onScaleEnd==");
     }
 
     @Override
@@ -291,14 +304,14 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
                 isCanDrag = isCanDrag(dx, dy);
                 if (isCanDrag) {
                     //当图片拖动到边界时，父控件拦截事件
-                    if (rect.left == 0 && dx > 0) {
+                    if (rect.left >= 0 && dx > 0) {
                         if (getParent() instanceof ViewPager) {
                             //父控件拦截
                             getParent().requestDisallowInterceptTouchEvent(false);
                         }
                     }
 
-                    if (rect.right == getWidth() && dx < 0) {
+                    if (rect.right <= getWidth() && dx < 0) {
                         if (getParent() instanceof ViewPager) {
                             //父控件拦截
                             getParent().requestDisallowInterceptTouchEvent(false);
@@ -417,5 +430,18 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
         });
         animator.setDuration(500);
         animator.start();
+    }
+
+    /**
+     * 单击图片操作，类似微信，点击的时候结束预览
+     */
+    public interface TouchCallBack {
+        void onSingleTap();
+    }
+
+    @Override //防止第二次设置图片的时候导致图片缩放异常，其他设置图片的方法类似，都会在onGlobalLayout中回调
+    public void setImageResource(int resId) {
+        once = false;
+        super.setImageResource(resId);
     }
 }
