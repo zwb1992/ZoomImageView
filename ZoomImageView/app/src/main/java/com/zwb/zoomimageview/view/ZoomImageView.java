@@ -1,17 +1,22 @@
 package com.zwb.zoomimageview.view;
 
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
+import android.support.v4.view.ViewPager;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.ViewConfiguration;
 import android.view.ViewTreeObserver;
 import android.widget.ImageView;
+
+import java.text.DecimalFormat;
 
 /**
  * Created by zwb
@@ -25,12 +30,17 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
     private Matrix matrix;
 
     private float mInitScale;//初始化缩放比例
+    private float mMiddleScale;//中等缩放比例
     private float mMaxScale;//最大缩放比例
 
     /**
      * 检测图片多点触控的缩放比例
      */
     private ScaleGestureDetector mScaleGestureDetector;
+    /**
+     * 双击放大缩小图片
+     */
+    private GestureDetector gestureDetector;
 
     private int mLastPointCount;//最近一次按下的点个数
     private float mLastX, mLastY;//最后按下时各手指的中心点
@@ -38,6 +48,8 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
     private boolean isCanDrag;//是否可拖动
     private boolean isCheckLeftAndRight;//左右是否能拖动
     private boolean isCheckTopAndBottom;//上下是否能拖动
+
+    private boolean autoScale;//图片是否正在自动缩放
 
     public ZoomImageView(Context context) {
         this(context, null);
@@ -57,6 +69,23 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
         matrix = new Matrix();
         mScaleGestureDetector = new ScaleGestureDetector(getContext(), this);
         mTouchSlop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
+        gestureDetector = new GestureDetector(getContext(), new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                Log.e("info", "==onDoubleTap==" + e.getPointerCount());
+                if (autoScale) {
+                    return true;
+                }
+                doubleTouchScaleImage(e.getX(), e.getY());
+                return true;
+            }
+
+            @Override//同上者，但有附加条件，就是Android会确保单击之后短时间内没有再次单击，才会触发该函数。
+            public boolean onSingleTapConfirmed(MotionEvent e) {
+                Log.e("info", "==onSingleTapConfirmed==" + e.getPointerCount());
+                return true;
+            }
+        });
     }
 
     @Override
@@ -98,6 +127,7 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
                 scale = Math.min(width * scale / dw, height * scale / dh);
             }
             mInitScale = scale;
+            mMiddleScale = scale * 2;
             mMaxScale = scale * 4;
             //先移动到中心点
             matrix.postTranslate((width - dw) / 2, (height - dh) / 2);
@@ -217,6 +247,9 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (gestureDetector.onTouchEvent(event)) {
+            return true;
+        }
         mScaleGestureDetector.onTouchEvent(event);
         int pointCount = event.getPointerCount();
         float touchX = event.getX();
@@ -234,12 +267,43 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
             mLastY = touchY;
         }
         mLastPointCount = pointCount;
+        RectF rect = getMatrixRectF();
         switch (event.getAction()) {
+            case MotionEvent.ACTION_DOWN:
+                //如果图片有一边超出屏幕，则屏蔽父控件事件，让其可拖动，0.01是各厂商的误差值
+                if (rect.width() >= getWidth() + 0.01 || rect.height() >= getHeight() + 0.01) {
+                    if (getParent() instanceof ViewPager) {
+                        //父控件不拦截
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                    }
+                }
+                break;
             case MotionEvent.ACTION_MOVE:
+                //如果图片有一边超出屏幕，则屏蔽父控件事件，让其可拖动，0.01是各厂商的误差值
+                if (rect.width() >= getWidth() + 0.01 || rect.height() >= getHeight() + 0.01) {
+                    if (getParent() instanceof ViewPager) {
+                        //父控件不拦截
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                    }
+                }
                 float dx = touchX - mLastX;
                 float dy = touchY - mLastY;
                 isCanDrag = isCanDrag(dx, dy);
                 if (isCanDrag) {
+                    //当图片拖动到边界时，父控件拦截事件
+                    if (rect.left == 0 && dx > 0) {
+                        if (getParent() instanceof ViewPager) {
+                            //父控件拦截
+                            getParent().requestDisallowInterceptTouchEvent(false);
+                        }
+                    }
+
+                    if (rect.right == getWidth() && dx < 0) {
+                        if (getParent() instanceof ViewPager) {
+                            //父控件拦截
+                            getParent().requestDisallowInterceptTouchEvent(false);
+                        }
+                    }
                     moveActionForDrag(dx, dy);
                 }
                 mLastX = touchX;
@@ -271,8 +335,6 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
      * @param dy
      */
     private void moveActionForDrag(float dx, float dy) {
-        Log.e("info", "==dx==" + dx);
-        Log.e("info", "==dy==" + dy);
         RectF rectF = getMatrixRectF();
         Drawable d = getDrawable();
         if (d != null) {
@@ -318,5 +380,42 @@ public class ZoomImageView extends ImageView implements ViewTreeObserver.OnGloba
             deltaY = height - rectF.bottom;
         }
         matrix.postTranslate(deltaX, deltaY);
+    }
+
+    /**
+     * 双击后缩放图片
+     *
+     * @param centerX 缩放的中心点
+     * @param centerY 缩放的中心点
+     */
+    private void doubleTouchScaleImage(final float centerX, final float centerY) {
+        //截取两位小数
+        final DecimalFormat df = new DecimalFormat("######0.00");
+        float scale = getScale();
+        autoScale = true;
+//        Log.e("info", "==scale==" + scale);
+        final float toScale;
+        if (scale > mMiddleScale) {//当前缩放偏大，双击后变小
+            toScale = mInitScale;
+        } else {
+            toScale = mMaxScale;
+        }
+//        Log.e("info", "==toScale==" + toScale);
+        ValueAnimator animator = ValueAnimator.ofFloat(scale, toScale);
+        animator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+            @Override
+            public void onAnimationUpdate(ValueAnimator animation) {
+                float curSCale = (float) animation.getAnimatedValue();
+//                Log.e("info", "==curSCale==" + curSCale);
+                if (df.format(curSCale).equals(df.format(toScale))) {//缩放结束
+                    autoScale = false;
+                }
+                matrix.setScale(curSCale, curSCale, centerX, centerY);
+                checkBorderAndCenterWhenScale();
+                setImageMatrix(matrix);
+            }
+        });
+        animator.setDuration(500);
+        animator.start();
     }
 }
